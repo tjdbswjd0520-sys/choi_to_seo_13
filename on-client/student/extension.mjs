@@ -642,8 +642,132 @@ export function createStudentView() {
       return container;
     },
     renderVulnerabilities() { return '학생 구현 대기: 정확한 설치 버전·OSV 출처·조회 시각·부분 결과·조회 실패를 구분하세요.'; },
-    renderAiConnection() { return '학생 구현 대기: 모델 응답 점검과 실제 사건 설명을 구분하고 AI 오류·취소·수동 복구를 안내하세요.'; },
-    renderExplanation() { return '학생 구현 대기: 선택한 사건의 근거·규칙·현재 상태와 AI 설명을 연결하세요. 제안은 자동 실행하지 않습니다.'; },
+    renderAiConnection({ status, mode, data, error, checkedAt } = {}) {
+      const container = document.createElement('div');
+      container.className = 'ai-connection-view';
+
+      const appendMessage = (className, text) => {
+        const message = document.createElement('p');
+        message.className = className;
+        message.textContent = text;
+        container.appendChild(message);
+      };
+      const appendMode = () => {
+        const labels = {
+          connected: '연결됨',
+          demo: '예제 자료(demo) · 실제 연결 아님',
+          disconnected: '연결 없음',
+          unknown: '연결 상태 확인 불가',
+        };
+        if (!Object.hasOwn(labels, mode)) return;
+        appendMessage('ai-connection-mode', `연결 모드: ${labels[mode]}`);
+      };
+      const safeCode = (value) => typeof value === 'string'
+        && /^[A-Za-z0-9_-]{1,80}$/.test(value)
+        && !/(?:Bearer\s+\S+|sk-(?:proj-|ant-|svcacct-)?[A-Za-z0-9_-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:api[_ -]?key|authorization|password|비밀번호|토큰)\s*[:=]\s*\S+)/i.test(value)
+        ? value
+        : 'AI_REQUEST_UNVERIFIED';
+      const safeMessage = (value) => {
+        if (typeof value !== 'string' || value.length === 0 || value.length > 1000
+          || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value)
+          || /(?:Bearer\s+\S+|sk-(?:proj-|ant-|svcacct-)?[A-Za-z0-9_-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:api[_ -]?key|authorization|password|비밀번호|토큰)\s*[:=]\s*\S+)/i.test(value)) {
+          return '안전한 오류 메시지를 확인할 수 없습니다.';
+        }
+        return value;
+      };
+      const errorGuidance = (code) => {
+        if (/PROVISION|AUTHORIZATION_CHANGED/i.test(code)) return '학생 계정 연결과 앱 권한을 담당자에게 확인해 주세요. 학생 잘못이 아닙니다.';
+        if (/AUTH_REQUIRED|AUTHENTICATION|ACCESS_BLOCKED|FORBIDDEN/i.test(code)) return '계정 연결을 다시 확인하고, 앱 권한은 담당자에게 확인해 주세요.';
+        if (/COHORT_BUDGET|LIMIT_REACHED|BUDGET_EXHAUSTED/i.test(code)) return '반 사용량 또는 이용 한도입니다. 담당자에게 확인해 주세요.';
+        if (/SESSION_CLOSED|OUTSIDE.*HOURS/i.test(code)) return '이용 시간이 아닙니다. 정해진 이용 시간을 확인해 주세요.';
+        if (/CANCEL/i.test(code)) return '요청이 취소됐습니다. 이전 점검 결과는 현재 결과가 아닙니다.';
+        if (/MODEL_NOT_CONFIGURED|MODEL_LIST_EMPTY|NO_MODEL/i.test(code)) return '사용할 수 있는 모델이 없습니다. 담당자에게 모델 허용 설정을 확인해 주세요.';
+        if (/RATE_LIMIT|TIMEOUT|NETWORK|CONNECTION/i.test(code)) return '요청 제한, 시간 초과 또는 네트워크 문제일 수 있습니다. 잠시 뒤 직접 다시 점검해 주세요.';
+        return '연결 상태와 앱 권한을 확인할 수 없습니다. 담당자에게 계정 연결과 앱 권한 확인을 요청해 주세요.';
+      };
+
+      appendMode();
+      if (status === 'idle') {
+        appendMessage('ai-connection-idle', 'AI 연결 점검 전입니다. 다시 점검하려면 「현재 API 연결 점검」을 직접 누르세요.');
+        return container;
+      }
+      if (status === 'loading') {
+        appendMessage('ai-connection-loading', 'AI 연결 점검 중입니다. 자동 재점검은 하지 않습니다.');
+        return container;
+      }
+      if (status === 'error') {
+        const code = safeCode(error?.code);
+        appendMessage('ai-connection-error', `AI 연결 점검 실패 (${code}): ${safeMessage(error?.message)}`);
+        appendMessage('ai-connection-error-guidance', errorGuidance(code));
+        appendMessage('ai-connection-retry', '다시 점검하려면 사용자가 「현재 API 연결 점검」을 직접 누르세요.');
+        return container;
+      }
+      if (status !== 'ok') {
+        appendMessage('ai-connection-unknown', 'AI 연결 점검 상태를 확인할 수 없습니다.');
+        return container;
+      }
+
+      if (data?.audienceAuthorization !== 'test' && data?.audienceAuthorization !== 'verified') {
+        appendMessage('ai-connection-unknown', 'AI 연결 점검 결과를 확인할 수 없습니다.');
+        return container;
+      }
+      const authorizationLabel = data.audienceAuthorization === 'test'
+        ? '시험 연결 점검(test)'
+        : '앱 권한 확인 후 점검(verified)';
+      appendMessage('ai-connection-result', authorizationLabel);
+      appendMessage('ai-connection-model-count', `모델 수: ${Number.isInteger(data.modelCount) && data.modelCount >= 0 ? data.modelCount : '확인 불가'}`);
+      appendMessage('ai-connection-checked-at', `점검 시각: ${typeof checkedAt === 'string' && checkedAt ? checkedAt : '확인 불가'}`);
+      appendMessage('ai-connection-explanation-note', '이 점검은 AI 연결과 모델 응답만 확인했습니다. 사건 설명은 아직 실행하지 않았습니다.');
+      return container;
+    },
+    renderExplanation({ event, explanation, checkedAt } = {}) {
+      const container = document.createElement('div');
+      container.className = 'explanation-view';
+
+      const appendMessage = (className, text) => {
+        const message = document.createElement('p');
+        message.className = className;
+        message.textContent = text;
+        container.appendChild(message);
+      };
+      const safeCode = (value) => typeof value === 'string'
+        && /^[A-Za-z0-9_-]{1,80}$/.test(value)
+        && !/(?:Bearer\s+\S+|sk-(?:proj-|ant-|svcacct-)?[A-Za-z0-9_-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:api[_ -]?key|authorization|password|비밀번호|토큰)\s*[:=]\s*\S+)/i.test(value)
+        ? value
+        : 'AI_REQUEST_UNVERIFIED';
+      const safeMessage = (value) => {
+        if (typeof value !== 'string' || value.length === 0 || value.length > 1000
+          || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value)
+          || /(?:Bearer\s+\S+|sk-(?:proj-|ant-|svcacct-)?[A-Za-z0-9_-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:api[_ -]?key|authorization|password|비밀번호|토큰)\s*[:=]\s*\S+)/i.test(value)) {
+          return '안전한 오류 메시지를 확인할 수 없습니다.';
+        }
+        return value;
+      };
+
+      if (explanation?.status === 'idle') {
+        appendMessage('explanation-idle', '보안 기록에서 설명할 사건을 선택해 요청하세요.');
+        return container;
+      }
+      if (explanation?.status === 'loading') {
+        appendMessage('explanation-loading', '선택한 보안 기록의 사건 설명을 확인하는 중입니다.');
+        return container;
+      }
+      if (explanation?.status === 'error') {
+        const code = safeCode(explanation.error?.code);
+        appendMessage('explanation-error', `사건 설명 요청 실패 (${code}): ${safeMessage(explanation.error?.message)}`);
+        appendMessage('explanation-error-note', '사건 설명 요청 실패는 보안 기록을 변경하지 않습니다.');
+        return container;
+      }
+      if (explanation?.status !== 'ok' || typeof event?.id !== 'string' || typeof explanation.data?.summary !== 'string') {
+        appendMessage('explanation-unknown', '사건 설명 결과를 확인할 수 없습니다.');
+        return container;
+      }
+
+      container.setAttribute('data-student-explanation-event', event.id);
+      appendMessage('explanation-event-id', `사건 ID: ${event.id}`);
+      appendMessage('explanation-summary', explanation.data.summary);
+      return container;
+    },
     renderAction() { return '학생 구현 대기: 현재 사건·조치·실제 대상·사람 확인·ACK와 원천 효과·unknown을 구분하세요.'; },
   };
 }
